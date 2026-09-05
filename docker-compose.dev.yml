@@ -4,8 +4,11 @@ services:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     container_name: backend
     working_dir: /backend/src
+<<<<<<< HEAD
     environment:
       - PYTHONPATH=/backend/src
+=======
+>>>>>>> 8e09242e0b43f6082f9881b95cc1201472508d5b
     volumes:
       - ./backend:/backend
       - /var/run/docker.sock:/var/run/docker.sock
@@ -17,7 +20,11 @@ services:
 
   backend-worker:
     build: ./backend
+<<<<<<< HEAD
     command: [ 'celery', '-A', 'app.core.celery_app', 'worker', '-l', 'info' ]
+=======
+    command: [ 'celery', '--workdir', 'src', '-A', 'app.core.celery_app', 'worker', '-l', 'info' ]
+>>>>>>> 8e09242e0b43f6082f9881b95cc1201472508d5b
     container_name: backend-worker
     env_file: ".env.dev"
     working_dir: /backend/src
