@@ -1,1 +1,1 @@
-Generic single-database configuration.
+Заменил from src.service import DB_URL / from src.models import Base на from app.core.config import get_settings / from app.models import Base — под новую структуру (src/app/...) и вынесенный в Settings.database_url конфиг. Также убрал import src.models (лишний, дублировал from src.models import Base) и config.set_main_option('sqlalchemy.url', DB_URL) заменил на вызов get_settings().database_url.
