@@ -24,3 +24,7 @@ celery_app.conf.broker_pool_limit = 10
 # аварийная смерть воркера оставляла бы файл в processing навсегда.
 celery_app.conf.task_acks_late = True
 celery_app.conf.task_reject_on_worker_lost = True
+# Redis возвращает неподтверждённую задачу после visibility_timeout.
+# Значение должно быть больше максимального времени выполнения задачи,
+# иначе нормально выполняющаяся задача может быть продублирована.
+celery_app.conf.broker_transport_options = {"visibility_timeout": 3600}
