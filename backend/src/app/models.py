@@ -35,6 +35,7 @@ class StoredFile(Base):
     # Время последнего перевода файла в processing — нужно для recovery зависших тасков.
     processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Результат проверки на подозрительный контент: clean / suspicious / failed / None (ещё не проверен).
+    processing_task_id: Mapped[str | None] = mapped_column(String(155), nullable=True)
     scan_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     scan_details: Mapped[str | None] = mapped_column(String(500), nullable=True)
     # Извлечённые метаданные файла (строки/страницы и т.п.), формат зависит от mime_type.

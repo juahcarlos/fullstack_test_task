@@ -147,20 +147,22 @@ def _build_alert(processing_status: str, requires_attention: bool, scan_details:
     return "info", "File processed successfully"
 
 
-async def _load_file_snapshot(file_id: str) -> tuple[str, str, int, str] | None:
+async def _load_file_snapshot(file_id: str, task_id: str) -> tuple[str, str, int, str] | None:
     """Читает исходные поля файла и переводит его в статус processing.
     Короткая транзакция: сразу коммитит, чтобы не держать БД открытой
     во время последующего чтения файла с диска.
-    Файл в processing моложе PROCESSING_TIMEOUT считается обрабатываемым
-    прямо сейчас (пропускаем повтор). Файл в processing старше таймаута
-    считается зависшим после аварийного падения воркера — обработка
-    запускается заново (claim через SELECT FOR UPDATE не даёт двум
-    воркерам забрать один и тот же зависший файл одновременно).
+    Если processing уже занят: тем же task_id (redelivery того же таска
+    после смерти воркера, acks_late+reject_on_worker_lost) — продолжаем
+    безопасно. Другим task_id моложе PROCESSING_TIMEOUT — считаем, что
+    он реально работает сейчас, пропускаем. Старше таймаута — считаем
+    прерванным, обрабатываем заново (SELECT FOR UPDATE не даёт двум
+    воркерам забрать файл одновременно).
     Args:
         file_id (str): Идентификатор файла.
+        task_id (str): Id текущего Celery-таска (self.request.id).
     Returns:
         tuple[str, str, int, str] | None: (original_name, stored_name, size, mime_type)
-            или None, если файл не найден или уже обрабатывается/обработан.
+            или None, если файл не найден или обрабатывается другим таском/уже обработан.
     """
     async with UnitOfWork(async_session_maker) as uow:
         file_item = await uow.files.get_by_id_for_update(file_id)
@@ -169,15 +171,18 @@ async def _load_file_snapshot(file_id: str) -> tuple[str, str, int, str] | None:
         if file_item.processing_status in {"processed", "failed"}:
             return None  # уже обработан — повторный запуск таска ничего не делает
         if file_item.processing_status == "processing":
-            started_at = file_item.processing_started_at
-            if started_at is not None:
-                if started_at.tzinfo is None:
-                    started_at = started_at.replace(tzinfo=timezone.utc)
-                if datetime.now(timezone.utc) - started_at < PROCESSING_TIMEOUT:
-                    return None  # ещё в пределах таймаута — обрабатывается сейчас, пропускаем
-                # старше таймаута — считаем прерванным аварийным падением воркера, обрабатываем заново
+            if file_item.processing_task_id == task_id:
+                pass  # redelivery того же таска после смерти воркера — продолжаем
+            else:
+                started_at = file_item.processing_started_at
+                if started_at is not None:
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=timezone.utc)
+                    if datetime.now(timezone.utc) - started_at < PROCESSING_TIMEOUT:
+                        return None  # другой таск реально работает сейчас
         file_item.processing_status = "processing"
         file_item.processing_started_at = datetime.now(timezone.utc)
+        file_item.processing_task_id = task_id
         await uow.commit()
         return file_item.original_name, file_item.stored_name, file_item.size, file_item.mime_type
 
@@ -242,7 +247,7 @@ def _run_scan_and_metadata(
     return scan_status, scan_details, requires_attention, metadata, "processed"
 
 
-async def _process_file(file_id: str) -> None:
+async def _process_file(file_id: str, task_id: str) -> None:
     """Выполняет полный цикл обработки файла: скан -> метаданные -> алерт.
     Три шага: короткая транзакция читает данные файла (_load_file_snapshot),
     затем без БД идут скан по метаданным и чтение файла с диска, в конце
@@ -250,10 +255,11 @@ async def _process_file(file_id: str) -> None:
     (_save_processing_result).
     Args:
         file_id (str): Идентификатор файла, подлежащего обработке.
+        task_id (str): Id текущего Celery-таска (self.request.id).
     Returns:
         None
     """
-    snapshot = await _load_file_snapshot(file_id)
+    snapshot = await _load_file_snapshot(file_id, task_id)
     if snapshot is None:
         return
 
@@ -271,14 +277,12 @@ async def _process_file(file_id: str) -> None:
     await _save_processing_result(file_id, scan_status, scan_details, requires_attention, processing_status, metadata)
 
 
-@celery_app.task
-def process_file(file_id: str) -> None:
+@celery_app.task(bind=True)
+def process_file(self, file_id: str) -> None:
     """Точка входа Celery-таска — синхронно запускает асинхронную обработку файла.
-
     Args:
         file_id (str): Идентификатор файла, переданный при постановке задачи в очередь.
-
     Returns:
         None
     """
-    run_in_worker_loop(_process_file(file_id))
+    run_in_worker_loop(_process_file(file_id, self.request.id))
