@@ -20,6 +20,11 @@ from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.core.database import async_session_maker
 from app.core.uow import UnitOfWork
+from celery.signals import worker_process_init, worker_process_shutdown
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 settings = get_settings()
 
@@ -33,22 +38,27 @@ settings = get_settings()
 _worker_loop: asyncio.AbstractEventLoop | None = None
 
 
-def run_in_worker_loop(coroutine):
-    """Выполняет переданную корутину в выделенном для воркера event loop'е.
-
-    Args:
-        coroutine (Coroutine): Корутина, которую нужно выполнить синхронно
-            в контексте Celery-таска.
-
-    Returns:
-        Any: Результат выполнения корутины.
-    """
+@worker_process_init.connect
+def _init_worker_loop(**kwargs) -> None:
+    """Создаёт event loop при старте процесса воркера (один раз на процесс)."""
     global _worker_loop
-    if _worker_loop is None or _worker_loop.is_closed():
-        _worker_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_worker_loop)
-    return _worker_loop.run_until_complete(coroutine)
+    _worker_loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(_worker_loop)
 
+
+@worker_process_shutdown.connect
+def _close_worker_loop(**kwargs) -> None:
+    """Закрывает event loop при остановке процесса воркера."""
+    global _worker_loop
+    if _worker_loop is not None:
+        _worker_loop.close()
+        _worker_loop = None
+
+
+def run_in_worker_loop(coroutine):
+    """Выполняет переданную корутину в event loop'е текущего процесса воркера."""
+    assert _worker_loop is not None, "worker loop not initialized — worker_process_init signal did not fire"
+    return _worker_loop.run_until_complete(coroutine)
 
 def _scan_for_threats(original_name: str, size: int, mime_type: str) -> tuple[str, str, bool]:
     """Проверяет файл на признаки подозрительности по его метаданным (без чтения содержимого).
@@ -199,45 +209,52 @@ async def _save_processing_result(
         await uow.alerts.create(file_id=file_id, level=level, message=message)
 
 
+def _run_scan_and_metadata(
+    original_name: str, stored_name: str, size: int, mime_type: str
+) -> tuple[str | None, str | None, bool, dict | None, str]:
+    """Прогоняет скан и извлечение метаданных, возвращает итоговый статус."""
+    scan_status, scan_details, requires_attention = _scan_for_threats(original_name, size, mime_type)
+
+    stored_path = settings.storage_dir / stored_name
+    if not stored_path.exists():
+        # файл пропал с диска между загрузкой и обработкой
+        return scan_status or "failed", "stored file not found during metadata extraction", requires_attention, None, "failed"
+
+    try:
+        metadata = _extract_metadata(stored_path, mime_type)
+    except OSError as e:
+        # файл есть, но прочитать не вышло (права, диск и т.п.) — тоже сбой
+        logger.exception("metadata extraction failed for file stored as %s", stored_name)
+        return scan_status or "failed", f"metadata extraction failed: {type(e).__name__}", requires_attention, None, "failed"
+
+    return scan_status, scan_details, requires_attention, metadata, "processed"
+
+
 async def _process_file(file_id: str) -> None:
     """Выполняет полный цикл обработки файла: скан -> метаданные -> алерт.
-
     Три шага: короткая транзакция читает данные файла (_load_file_snapshot),
     затем без БД идут скан по метаданным и чтение файла с диска, в конце
     вторая короткая транзакция сохраняет результат и создаёт алерт
     (_save_processing_result).
-
     Args:
         file_id (str): Идентификатор файла, подлежащего обработке.
-
     Returns:
         None
     """
     snapshot = await _load_file_snapshot(file_id)
     if snapshot is None:
         return
+
     original_name, stored_name, size, mime_type = snapshot
 
-    scan_status, scan_details, requires_attention = _scan_for_threats(original_name, size, mime_type)
-
-    stored_path = settings.storage_dir / stored_name
-    metadata = None
-    processing_status = "processed"
-
-    if not stored_path.exists():
-        # файл пропал с диска между загрузкой и обработкой
-        processing_status = "failed"
-        scan_status = scan_status or "failed"
-        scan_details = "stored file not found during metadata extraction"
-    else:
-        try:
-            metadata = _extract_metadata(stored_path, mime_type)
-        except OSError as e:
-            # файл есть, но прочитать не вышло (права, диск и т.п.) — тоже сбой
-            metadata = None
-            processing_status = "failed"
-            scan_status = scan_status or "failed"
-            scan_details = f"metadata extraction failed: {e}"
+    try:
+        scan_status, scan_details, requires_attention, metadata, processing_status = _run_scan_and_metadata(
+            original_name, stored_name, size, mime_type
+        )
+    except Exception:
+        # любой непредвиденный сбой (не OSError) — файл не должен зависнуть в processing
+        logger.exception("unexpected failure processing file_id=%s", file_id)
+        scan_status, scan_details, requires_attention, metadata, processing_status = "failed", "unexpected processing error", False, None, "failed"
 
     await _save_processing_result(file_id, scan_status, scan_details, requires_attention, processing_status, metadata)
 

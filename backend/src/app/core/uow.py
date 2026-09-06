@@ -11,7 +11,7 @@ from types import TracebackType
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import Alert, StoredFile
-from app.repositories import AlertRepository, BaseRepository, FileRepository
+from app.repositories import AlertRepository, FileRepository
 
 
 class UnitOfWork:
@@ -25,8 +25,8 @@ class UnitOfWork:
         """
         self._session_maker = session_maker
         self.session: AsyncSession | None = None
-        self.files = FileRepository(self.session)
-        self.alerts = AlertRepository(self.session)
+        self.files: FileRepository | None = None
+        self.alerts: AlertRepository | None = None
 
     async def __aenter__(self) -> "UnitOfWork":
         """Открывает сессию и инициализирует репозитории на её основе.

@@ -156,9 +156,7 @@ async def client(
     from app.core.dependencies import get_uow
     from app.core.uow import UnitOfWork
     from app.main import app
-
     monkeypatch.setattr(services_module.settings, "storage_dir", shared_storage_dir)
-    monkeypatch.setattr(services_module.settings, "max_upload_size", 10 * 1024 * 1024)
 
     async def override_get_uow():
         async with UnitOfWork(test_session_maker) as uow:

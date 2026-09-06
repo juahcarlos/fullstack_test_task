@@ -92,7 +92,6 @@ class TestFileServiceCreateFile:
         import app.services as services_module
 
         monkeypatch.setattr(services_module.settings, "storage_dir", tmp_path)
-        monkeypatch.setattr(services_module.settings, "max_upload_size", 10 * 1024 * 1024)
 
         created = StoredFile(id="abc", title="Report", original_name="report.txt")
         mock_uow.files.create.return_value = created
@@ -115,7 +114,6 @@ class TestFileServiceCreateFile:
         import app.services as services_module
 
         monkeypatch.setattr(services_module.settings, "storage_dir", tmp_path)
-        monkeypatch.setattr(services_module.settings, "max_upload_size", 10 * 1024 * 1024)
 
         mock_uow.files.create.return_value = StoredFile(id="xyz", title="No dispatcher")
 

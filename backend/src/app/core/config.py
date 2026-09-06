@@ -35,9 +35,6 @@ class Settings(BaseSettings):
     def model_post_init(self, __context) -> None:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-    # Максимально допустимый размер загружаемого файла в байтах (10 МБ).
-    max_upload_size: int = 10 * 1024 * 1024
-
     @property
     def database_url(self) -> str:
         """Собирает строку подключения SQLAlchemy (async, asyncpg-драйвер)."""

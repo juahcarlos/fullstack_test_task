@@ -195,7 +195,7 @@ class FileService:
         """
         file_item = await self.get_file(file_id)
         stored_path = settings.storage_dir / file_item.stored_name
-        alerts = await self.uow.alerts.get_multi(filters={"file_id": file_id})
+        alerts = await self.uow.alerts.get_multi(file_id=file_id)
         for alert in alerts:
             await self.uow.alerts.delete(alert)
         await self.uow.files.delete(file_item)
