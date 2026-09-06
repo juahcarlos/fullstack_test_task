@@ -15,7 +15,7 @@ services.py, FileService.create_file) — этот модуль занимает
 
 import asyncio
 from pathlib import Path
-
+from datetime import datetime, timedelta, timezone
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.core.database import async_session_maker
@@ -27,6 +27,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+PROCESSING_TIMEOUT = timedelta(minutes=10)
 
 
 # asyncpg-соединения привязаны к event loop, в котором были созданы, а
@@ -148,24 +149,35 @@ def _build_alert(processing_status: str, requires_attention: bool, scan_details:
 
 async def _load_file_snapshot(file_id: str) -> tuple[str, str, int, str] | None:
     """Читает исходные поля файла и переводит его в статус processing.
-
     Короткая транзакция: сразу коммитит, чтобы не держать БД открытой
     во время последующего чтения файла с диска.
-
+    Файл в processing моложе PROCESSING_TIMEOUT считается обрабатываемым
+    прямо сейчас (пропускаем повтор). Файл в processing старше таймаута
+    считается зависшим после аварийного падения воркера — обработка
+    запускается заново (claim через SELECT FOR UPDATE не даёт двум
+    воркерам забрать один и тот же зависший файл одновременно).
     Args:
         file_id (str): Идентификатор файла.
-
     Returns:
         tuple[str, str, int, str] | None: (original_name, stored_name, size, mime_type)
-            или None, если файл не найден (например, удалили, пока таск ждал в очереди).
+            или None, если файл не найден или уже обрабатывается/обработан.
     """
     async with UnitOfWork(async_session_maker) as uow:
         file_item = await uow.files.get_by_id_for_update(file_id)
         if not file_item:
             return None
-        if file_item.processing_status in {"processed", "failed", "processing"}:
+        if file_item.processing_status in {"processed", "failed"}:
             return None  # уже обработан — повторный запуск таска ничего не делает
+        if file_item.processing_status == "processing":
+            started_at = file_item.processing_started_at
+            if started_at is not None:
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                if datetime.now(timezone.utc) - started_at < PROCESSING_TIMEOUT:
+                    return None  # ещё в пределах таймаута — обрабатывается сейчас, пропускаем
+                # старше таймаута — считаем прерванным аварийным падением воркера, обрабатываем заново
         file_item.processing_status = "processing"
+        file_item.processing_started_at = datetime.now(timezone.utc)
         await uow.commit()
         return file_item.original_name, file_item.stored_name, file_item.size, file_item.mime_type
 

@@ -32,6 +32,8 @@ class StoredFile(Base):
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     # Статус пайплайна обработки: uploaded -> processing -> processed/failed.
     processing_status: Mapped[str] = mapped_column(String(50), nullable=False, default="uploaded")
+    # Время последнего перевода файла в processing — нужно для recovery зависших тасков.
+    processing_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # Результат проверки на подозрительный контент: clean / suspicious / failed / None (ещё не проверен).
     scan_status: Mapped[str | None] = mapped_column(String(50), nullable=True)
     scan_details: Mapped[str | None] = mapped_column(String(500), nullable=True)

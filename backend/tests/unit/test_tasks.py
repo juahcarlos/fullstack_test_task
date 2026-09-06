@@ -4,15 +4,14 @@ UnitOfWork заменяется на асинхронный контекстны
 оборачивающий тот же mock_uow — таск работает с моками repositories,
 без реальной БД. Файловая система подменяется через tmp_path.
 """
-
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from app.models import StoredFile
-from app.tasks import _process_file
-
+from app.tasks import PROCESSING_TIMEOUT, _load_file_snapshot, _process_file
 
 @pytest.fixture
 def patch_uow(monkeypatch, mock_uow):
@@ -170,3 +169,82 @@ class TestProcessFile:
         await _process_file("5")
 
         assert file_item.metadata_json["approx_page_count"] == 2
+
+
+class TestProcessingRecovery:
+    """Тесты recovery зависшего processing (_load_file_snapshot)."""
+
+    async def test_fresh_processing_is_skipped(self, patch_uow):
+        """Файл, обрабатываемый прямо сейчас (processing моложе таймаута), пропускается."""
+        file_item = StoredFile(
+            id="10",
+            original_name="a.txt",
+            stored_name="a.txt",
+            mime_type="text/plain",
+            size=10,
+            processing_status="processing",
+            processing_started_at=datetime.now(timezone.utc) - timedelta(minutes=2),
+        )
+        patch_uow.files.get_by_id_for_update.return_value = file_item
+
+        result = await _load_file_snapshot("10")
+
+        assert result is None
+        patch_uow.commit.assert_not_called()
+
+    async def test_stale_processing_is_retried(self, patch_uow):
+        """Файл, зависший в processing дольше таймаута, обрабатывается заново."""
+        file_item = StoredFile(
+            id="11",
+            original_name="b.txt",
+            stored_name="b.txt",
+            mime_type="text/plain",
+            size=10,
+            processing_status="processing",
+            processing_started_at=datetime.now(timezone.utc) - PROCESSING_TIMEOUT - timedelta(minutes=1),
+        )
+        patch_uow.files.get_by_id_for_update.return_value = file_item
+
+        result = await _load_file_snapshot("11")
+
+        assert result == ("b.txt", "b.txt", 10, "text/plain")
+        assert file_item.processing_status == "processing"
+        assert file_item.processing_started_at is not None
+        patch_uow.commit.assert_awaited_once()
+
+    async def test_processing_without_started_at_is_retried(self, patch_uow):
+        """Файл в processing без метки времени (legacy-запись) считается зависшим и обрабатывается заново."""
+        file_item = StoredFile(
+            id="12",
+            original_name="c.txt",
+            stored_name="c.txt",
+            mime_type="text/plain",
+            size=10,
+            processing_status="processing",
+            processing_started_at=None,
+        )
+        patch_uow.files.get_by_id_for_update.return_value = file_item
+
+        result = await _load_file_snapshot("12")
+
+        assert result == ("c.txt", "c.txt", 10, "text/plain")
+        assert file_item.processing_started_at is not None
+
+    async def test_concurrent_worker_does_not_reprocess_freshly_claimed_file(self, patch_uow):
+        """Второй worker, увидевший файл сразу после claim первым, не берёт файл повторно."""
+        file_item = StoredFile(
+            id="13",
+            original_name="d.txt",
+            stored_name="d.txt",
+            mime_type="text/plain",
+            size=10,
+            processing_status="uploaded",
+        )
+        patch_uow.files.get_by_id_for_update.return_value = file_item
+
+        first_result = await _load_file_snapshot("13")
+        assert first_result is not None
+        assert file_item.processing_status == "processing"
+
+        second_result = await _load_file_snapshot("13")
+        assert second_result is None
