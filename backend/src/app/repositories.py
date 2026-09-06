@@ -77,11 +77,13 @@ class AlertRepository:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def get_multi(self, *, file_id: str | None = None, skip: int = 0, limit: int = 100) -> list[Alert]:
+    async def get_multi(self, *, file_id: str | None = None, skip: int = 0, limit: int | None = 100) -> list[Alert]:
         query = select(Alert).order_by(Alert.created_at.desc())
         if file_id is not None:
             query = query.where(Alert.file_id == file_id)
-        query = query.offset(skip).limit(limit)
+        query = query.offset(skip)
+        if limit is not None:
+            query = query.limit(limit)
         result = await self.session.execute(query)
         return list(result.scalars().all())
 

@@ -141,17 +141,20 @@ class FileService:
             stored_path.unlink()
             raise EmptyFileError("Uploaded file is empty")
 
-        file_item = await self.uow.files.create(
-            id=file_id,
-            title=title,
-            original_name=safe_original_name,
-            stored_name=stored_name,
-            mime_type=mimetypes.guess_type(stored_name)[0] or "application/octet-stream",
-            size=size,
-            processing_status="uploaded",
-        )
-
-        await self.uow.commit()
+        try:
+            file_item = await self.uow.files.create(
+                id=file_id,
+                title=title,
+                original_name=safe_original_name,
+                stored_name=stored_name,
+                mime_type=mimetypes.guess_type(stored_name)[0] or "application/octet-stream",
+                size=size,
+                processing_status="uploaded",
+            )
+            await self.uow.commit()
+        except Exception:
+            stored_path.unlink(missing_ok=True)
+            raise
 
         if self.task_dispatcher:
             self.task_dispatcher(file_item.id)
@@ -195,7 +198,7 @@ class FileService:
         """
         file_item = await self.get_file(file_id)
         stored_path = settings.storage_dir / file_item.stored_name
-        alerts = await self.uow.alerts.get_multi(file_id=file_id)
+        alerts = await self.uow.alerts.get_multi(file_id=file_id, limit=None)
         for alert in alerts:
             await self.uow.alerts.delete(alert)
         await self.uow.files.delete(file_item)
