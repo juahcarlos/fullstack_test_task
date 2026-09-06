@@ -163,7 +163,7 @@ async def _load_file_snapshot(file_id: str) -> tuple[str, str, int, str] | None:
         file_item = await uow.files.get_by_id_for_update(file_id)
         if not file_item:
             return None
-        if file_item.processing_status in {"processed", "failed"}:
+        if file_item.processing_status in {"processed", "failed", "processing"}:
             return None  # уже обработан — повторный запуск таска ничего не делает
         file_item.processing_status = "processing"
         await uow.commit()

@@ -146,7 +146,7 @@ class FileService:
             title=title,
             original_name=safe_original_name,
             stored_name=stored_name,
-            mime_type=upload_file.content_type or mimetypes.guess_type(stored_name)[0] or "application/octet-stream",
+            mime_type=mimetypes.guess_type(stored_name)[0] or "application/octet-stream",
             size=size,
             processing_status="uploaded",
         )

@@ -27,7 +27,7 @@ services:
       - backend-db
 
   backend-db:
-    image: postgres:latest
+    image: postgres:18.1
     container_name: backend-db
     ports:
       - "5433:5432"
@@ -36,7 +36,7 @@ services:
       - backend-db-volume:/var/lib/postgresql
 
   backend-redis:
-    image: redis:latest
+    image: redis:8.4.0
     container_name: backend-redis
 
   frontend:
