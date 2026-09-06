@@ -18,3 +18,9 @@ celery_app = Celery(
     include=["app.tasks"],
 )
 celery_app.conf.broker_pool_limit = 10
+# Если воркер аварийно умрёт посреди обработки (SIGKILL/OOM), Celery не
+# получит ack и передаст задачу другому/перезапущенному воркеру сам —
+# без этого таск бы считался выполненным сразу после получения, и
+# аварийная смерть воркера оставляла бы файл в processing навсегда.
+celery_app.conf.task_acks_late = True
+celery_app.conf.task_reject_on_worker_lost = True
