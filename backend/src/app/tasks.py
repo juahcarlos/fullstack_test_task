@@ -247,6 +247,17 @@ def _run_scan_and_metadata(
     return scan_status, scan_details, requires_attention, metadata, "processed"
 
 
+async def _mark_failed_without_alert(file_id: str) -> None:
+    try:
+        async with UnitOfWork(async_session_maker) as uow:
+            file_item = await uow.files.get_by_id(file_id)
+            if file_item:
+                file_item.processing_status = "failed"
+                await uow.commit()
+    except Exception:
+        logger.exception("failed to mark file_id=%s as failed after save failure", file_id)
+
+
 async def _process_file(file_id: str, task_id: str) -> None:
     """Выполняет полный цикл обработки файла: скан -> метаданные -> алерт.
     Три шага: короткая транзакция читает данные файла (_load_file_snapshot),
@@ -274,7 +285,11 @@ async def _process_file(file_id: str, task_id: str) -> None:
         logger.exception("unexpected failure processing file_id=%s", file_id)
         scan_status, scan_details, requires_attention, metadata, processing_status = "failed", "unexpected processing error", False, None, "failed"
 
-    await _save_processing_result(file_id, scan_status, scan_details, requires_attention, processing_status, metadata)
+    try:
+        await _save_processing_result(file_id, scan_status, scan_details, requires_attention, processing_status, metadata)
+    except Exception:
+        logger.exception("failed to save processing result for file_id=%s", file_id)
+        await _mark_failed_without_alert(file_id)
 
 
 @celery_app.task(bind=True)

@@ -164,6 +164,29 @@ class TestProcessFile:
 
         assert file_item.metadata_json["approx_page_count"] == 2
 
+    async def test_marks_failed_when_save_processing_result_raises(self, patch_uow, tmp_path, monkeypatch):
+        """Если _save_processing_result падает, файл всё равно переводится в failed, а не остаётся в processing."""
+        import app.tasks as tasks_module
+
+        monkeypatch.setattr(tasks_module.settings, "storage_dir", tmp_path)
+        stored_path = tmp_path / "ok.txt"
+        stored_path.write_text("line one\n")
+
+        file_item = StoredFile(
+            id="6",
+            original_name="ok.txt",
+            stored_name="ok.txt",
+            mime_type="text/plain",
+            size=stored_path.stat().st_size,
+        )
+        patch_uow.files.get_by_id_for_update.return_value = file_item
+        patch_uow.files.get_by_id.return_value = file_item
+        patch_uow.alerts.create.side_effect = Exception("db exploded")
+
+        await _process_file("6", "task-6")
+
+        assert file_item.processing_status == "failed"
+
 
 class TestProcessingRecovery:
     """Тесты recovery зависшего processing (_load_file_snapshot)."""

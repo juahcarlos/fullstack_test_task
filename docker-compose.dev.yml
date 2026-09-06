@@ -25,6 +25,7 @@ services:
       - ./backend:/backend
     depends_on:
       - backend-db
+      - backend-redis
 
   backend-db:
     image: postgres:18.1
